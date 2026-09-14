@@ -269,7 +269,7 @@ class Tracker3D:
 # Pan/tilt turret: two independent slew axes, 3D lead-pursuit solution
 # ----------------------------------------------------------------------------
 class PanTiltTurret:
-    def __init__(self, pos, power_w, spot_mm, max_slew_dps=250.0,
+    def __init__(self, pos, power_w, max_slew_dps=250.0,
                  cooldown_s=0.05):
         # cooldown_s: minimum time between shot STARTS. Real hardware fires
         # one dwell exposure per shot; without this, kill rate scaled with
@@ -278,7 +278,6 @@ class PanTiltTurret:
         self._next_ready = 0.0
         self.pos = np.asarray(pos, dtype=float)
         self.power = power_w
-        self.spot_mm = spot_mm
         self.max_slew = math.radians(max_slew_dps)
         # aim direction as azimuth/elevation (radians)
         self.az = 0.0
@@ -440,6 +439,10 @@ class PanTiltTurret:
         self.energy_j += flux * tp["dwell"]
         killed = rng.random() < p_kill
         self.beam_history.append((self.pos.copy(), closest.copy(), killed))
+        # Kill assignment: the beam is a line in space -- whichever TARGETED
+        # creature sits within hit_r of the beam at impact takes the dose,
+        # even if it is not the tracked one (swarm crossings). That is real
+        # beam physics, and it is how the hardware will behave too.
         if killed:
             for sw in swarm_list:
                 if not sw.alive() or sw.key not in (target_keys or SPECIES_ORDER):
@@ -452,7 +455,9 @@ class PanTiltTurret:
                     self.species_kills[sw.key] += 1
                     self.kill_events.append((self.clock, closest.copy(), tkey))
                     break
-        self.heat = min(1.0, self.heat + tp["dwell"] * 4.0)
+        # thermal load scales with ACTUAL beam power (2 W rig == 1.0 unit);
+        # the legacy 60 W tiers now duty-cycle hard, as a real diode would
+        self.heat = min(1.0, self.heat + tp["dwell"] * 4.0 * (self.power / 2.0))
         self._next_ready = self.clock + self.cooldown_s
 
     def _classify_species(self, track):
@@ -513,7 +518,7 @@ def run_sim(mode="mixed", single="mosquitoes", seconds=60.0, dt=1 / 60.0,
     # 0/None = auto-size per species table (legacy multi-laser fantasy).
     max_power = laser_w or max(THREATS[k]["power_w"] for k in targets)
     turret = PanTiltTurret(pos=(0.3, AREA / 2, 1.5),
-                           power_w=max_power, spot_mm=8.0)
+                           power_w=max_power)
     brain = flybrain.FlyBrain()
     turret.brain = brain
     turret.brain_mode = brain_mode

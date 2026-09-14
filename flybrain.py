@@ -71,7 +71,9 @@ class FlyBrain:
             az = math.atan2(rel[1], rel[0])            # -pi..pi
             el = math.asin(np.clip(rel[2] / r, -1, 1))  # -pi/2..pi/2
             ia = int((az + math.pi) / (2 * math.pi) * self.n_az) % self.n_az
-            ie = int((el + math.pi / 2) / math.pi * (self.n_el - 1))
+            # n_el bins with half-bin centers, matching wta_step's decode
+            ie = min(self.n_el - 1,
+                     int((el + math.pi / 2) / math.pi * self.n_el))
             # brightness falls with range: closer = brighter (fly cue)
             I[ie, ia] += 1.0 / (1.0 + 0.15 * r)
         return I

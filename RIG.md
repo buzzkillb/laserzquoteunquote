@@ -65,6 +65,42 @@ single-camera + depth-band system computes naturally).
 | Galvo/DAC streaming | 1 kHz | ESP32-S3, Rust or C, `hardware/protocol.py` frames |
 | Safety veto | on-demand + watchdog | MCU-local; can always say no |
 
+## Optics & night operation (validated)
+
+**Lens: 6 mm** on the OV9281 (34° HFOV, ~3 m × 1.9 m coverage at 5 m standoff).
+Pixels-on-target math (2.9 µm pitch, 1280 px):
+
+| Target | Detectable (≥1.5 px) |
+|---|---|
+| Mosquito (5 mm) | ~7 m |
+| Fly (8 mm) | ~11 m |
+| Moth (20 mm) | ~28 m |
+
+**The camera always out-ranges the 2 W beam (~6–8 m kill envelope).**
+Design invariant: detection range ≥ engagement range at every distance.
+Beyond ~8 m the beam can't build kill fluence (0.6 W/cm² at 12 m), so the
+depth-band veto is physics, not just software policy.
+
+**Night mode:** OV9281 is natively near-IR sensitive. Add a **$10 850 nm IR
+illuminator, strobed ~1 ms/frame** — motion-frozen dots at 30 fps, no smear.
+Global shutter (already in BOM) is required for the strobe trick. Dusk/night
+is when mosquitoes are most active; high-contrast dots on dark background is
+exactly the regime the FlyBrain STMD pipeline is tuned for. IR LED at 850 nm
+is invisible to humans; the red aiming dot stays visible for setup only.
+
+## SKU ladder
+
+| | Backyard (v1) | Pro |
+|---|---|---|
+| Laser | 2 W 445 nm, ~6–8 m kill envelope | 3–5 W tight-collimation, ~10–15 m |
+| Lens | 6 mm (34° FOV) | 12 mm (18° FOV, tracks to ~14 m mosq / ~22 m fly) |
+| Range tactic | engage in 2–6 m slab | **track at range, engage on entry** — maintain tracks in the far cone, fire the moment targets cross the kill envelope |
+| BOM | ~$180 | ~$230 |
+
+The tracker already supports track-then-engage (confirmed tracks persist
+across the `misses<4` coast window); the Pro SKU is mostly a lens + laser
+module change, not new software.
+
 ## What the sim now models faithfully
 
 - `--laser-w 2` → the one-diode rig; species auto-sizing is legacy
