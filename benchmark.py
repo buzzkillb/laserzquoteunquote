@@ -23,7 +23,6 @@ import argparse
 import json
 import math
 import os
-import shutil
 
 import matplotlib
 matplotlib.use("Agg")
@@ -36,7 +35,6 @@ from sim3d import THREATS, SPECIES_ORDER, AREA, HEIGHT, glyph_ms
 
 BG, PANE = "#04060d", "#0b1226"
 CYAN, GOLD, RED, GREEN = "#22d3ee", "#fbbf24", "#f87171", "#4ade80"
-SCRATCH = "_bench_tmp"
 
 MODES = [
     ("kalman", "OPTIMIZED", "#22d3ee",

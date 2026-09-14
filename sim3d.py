@@ -29,8 +29,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import animation
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
-from mpl_toolkits.mplot3d.art3d import Line3D
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 -- registers 3d projection
 
 # ----------------------------------------------------------------------------
 # Threat table (3D speeds; vertical speeds damped -- creatures don't hover)
@@ -132,8 +131,8 @@ class Swarm3D:
             if self.pos[i] < 0.2:
                 self.pos[i] = 0.2
                 self.vel[i] = abs(self.vel[i])
-            elif self.pos[i] > self.area_safe(i) - 0.2:
-                self.pos[i] = self.area_safe(i) - 0.2
+            elif self.pos[i] > AREA - 0.2:
+                self.pos[i] = AREA - 0.2
                 self.vel[i] = -abs(self.vel[i])
         zb = t["z_band"]
         if self.pos[2] < max(0.03, zb[0]):
@@ -142,9 +141,6 @@ class Swarm3D:
         elif self.pos[2] > min(HEIGHT - 0.05, zb[1]):
             self.pos[2] = min(HEIGHT - 0.05, zb[1])
             self.vel[2] = -abs(self.vel[2])
-
-    def area_safe(self, i):
-        return AREA
 
 
 # module-level world size (simpler than threading config through classes)
@@ -179,6 +175,13 @@ class Sensor3D:
 class Track3D:
     _next_id = 1
 
+    # constant model matrices (rebuilt every update otherwise)
+    _H = np.zeros((3, 6))
+    _H[0, 0] = _H[1, 1] = _H[2, 2] = 1.0
+    _Ht = _H.T
+    _R = np.diag([0.010 ** 2] * 3)
+    _I6 = np.eye(6)
+
     def __init__(self, z):
         self.id = Track3D._next_id
         Track3D._next_id += 1
@@ -190,27 +193,25 @@ class Track3D:
         self.species_hint = None
 
     def predict(self, dt):
-        F = np.eye(6)
-        for i in range(3):
-            F[i, i + 3] = dt
+        F = Track3D._I6.copy()
+        F[0, 3] = F[1, 4] = F[2, 5] = dt
         q = 0.5
         Q = np.zeros((6, 6))
-        for i in range(3):
-            Q[i, i] = dt ** 3 / 3 * q
-            Q[i, i + 3] = dt ** 2 / 2 * q
-            Q[i + 3, i + 3] = dt * q
+        Q[0, 0] = Q[1, 1] = Q[2, 2] = dt ** 3 / 3 * q
+        Q[3, 3] = Q[4, 4] = Q[5, 5] = dt * q
+        Q[0, 3] = Q[1, 4] = Q[2, 5] = dt ** 2 / 2 * q
         self.x = F @ self.x
         self.P = F @ self.P @ F.T + Q
 
     def update(self, z, dt):
-        H = np.zeros((3, 6))
-        H[0, 0] = H[1, 1] = H[2, 2] = 1.0
-        R = np.diag([0.010 ** 2] * 3)
-        y = z - H @ self.x
-        S = H @ self.P @ H.T + R
-        K = self.P @ H.T @ np.linalg.inv(S)
+        P = self.P
+        PHt = P @ Track3D._Ht
+        S = Track3D._H @ PHt + Track3D._R
+        # solve instead of inv: same result, ~2x faster, better conditioned
+        K = np.linalg.solve(S.T, PHt.T).T
+        y = z - self.x[:3]
         self.x = self.x + K @ y
-        self.P = (np.eye(6) - K @ H) @ self.P
+        self.P = (Track3D._I6 - K @ Track3D._H) @ P
         self.hits += 1
         self.misses = 0
         if self.hits >= 3:
@@ -230,20 +231,30 @@ class Tracker3D:
     def step(self, detections, dt):
         for tr in self.tracks:
             tr.predict(dt)
-        pairs = []
-        for i, tr in enumerate(self.tracks):
-            for j, z in enumerate(detections):
-                d = np.linalg.norm(tr.x[:3] - z)
-                if d < 0.30:
-                    pairs.append((d, i, j))
-        pairs.sort()
-        used_t, used_d = set(), set()
-        for d, i, j in pairs:
-            if i in used_t or j in used_d:
-                continue
-            self.tracks[i].update(detections[j], dt)
-            used_t.add(i)
-            used_d.add(j)
+        # GNN association, vectorized: one distance matrix instead of a
+        # per-(track, detection) np.linalg.norm call (profiled hotspot)
+        n_t, n_d = len(self.tracks), len(detections)
+        if n_t and n_d:
+            D = np.empty((n_t, n_d))
+            Z = np.asarray(detections)
+            for i, tr in enumerate(self.tracks):
+                diff = Z - tr.x[:3]
+                np.einsum("ij,ij->i", diff, diff, out=D[i])
+            D = np.sqrt(D)
+            pairs = []
+            mask = D < 0.30
+            for i, j in zip(*np.nonzero(mask)):
+                pairs.append((D[i, j], int(i), int(j)))
+            pairs.sort()
+            used_t, used_d = set(), set()
+            for d, i, j in pairs:
+                if i in used_t or j in used_d:
+                    continue
+                self.tracks[i].update(detections[j], dt)
+                used_t.add(i)
+                used_d.add(j)
+        else:
+            used_t, used_d = set(), set()
         for j, z in enumerate(detections):
             if j not in used_d:
                 self.tracks.append(Track3D(z))
@@ -306,10 +317,8 @@ class PanTiltTurret:
     def range_to(self, point):
         return np.linalg.norm(np.asarray(point) - self.pos)
 
-    def engage(self, tracks, dt, swarm_list, rng, tparams, target_keys=None):
-        """tparams: dict with dwell/pkill/flux_needed/spot_mm for the CURRENT
-        beam tuning (mixed mode: use the locked target's species table).
-        target_keys: None = engage every species; else only these species
+    def engage(self, tracks, dt, swarm_list, rng, target_keys=None):
+        """target_keys: None = engage every species; else only these species
         are targeted (e.g. backyard mode: just mosquitoes + flies)."""
         self.firing = False
         self.heat = max(0.0, self.heat - 0.55 * dt)
@@ -440,10 +449,6 @@ class PanTiltTurret:
                 bd, best = d, k
         return best
 
-    def _classify(self, speed, track):
-        """Back-compat wrapper."""
-        return self._classify_species(track)
-
     def time_to_turn(self, aim_point):
         az_t, el_t = self.angles_to(aim_point)
         daz = abs((az_t - self.az + math.pi) % (2 * math.pi) - math.pi)
@@ -507,7 +512,7 @@ def run_sim(mode="mixed", single="mosquitoes", seconds=60.0, dt=1 / 60.0,
         dets = sensor.observe(alive)
         brain.update(dets, turret.pos, dt)
         tracks = tracker.step(dets, dt)
-        turret.engage(tracks, dt, swarm, rng, None, target_keys=targets)
+        turret.engage(tracks, dt, swarm, rng, target_keys=targets)
 
         if prev_target is not None and turret.target_id != prev_target:
             stats["track_switches"] += 1

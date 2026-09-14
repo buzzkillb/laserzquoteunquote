@@ -106,12 +106,14 @@ class FlyBrain:
         k = 5
         kern = np.exp(-0.5 * (np.arange(-k, k + 1) / 1.4) ** 2)
         kern /= kern.sum()
-        surround = np.apply_along_axis(
-            lambda r: np.convolve(np.pad(r, k, mode="wrap"), kern, "valid"),
-            1, mag)
-        surround = np.apply_along_axis(
-            lambda c: np.convolve(np.pad(c, k, mode="edge"), kern, "valid"),
-            0, surround)
+        # separable convolution, vectorized via sliding windows (replaces
+        # 2x apply_along_axis + per-row np.convolve lambda calls)
+        rows = np.lib.stride_tricks.sliding_window_view(
+            np.pad(mag, ((0, 0), (k, k)), mode="wrap"), 2 * k + 1, axis=1)
+        surround = rows @ kern
+        cols = np.lib.stride_tricks.sliding_window_view(
+            np.pad(surround, ((k, k), (0, 0)), mode="edge"), 2 * k + 1, axis=0)
+        surround = cols @ kern
         self.saliency = np.clip(mag - 0.8 * surround, 0, None)
         return self.saliency
 
@@ -138,8 +140,10 @@ class FlyBrain:
             self.attention = None
             return None
         ie, ia = np.unravel_index(np.argmax(sal), sal.shape)
-        az = ia / self.n_az * 2 * math.pi - math.pi
-        el = ie / (self.n_el - 1) * math.pi - math.pi / 2
+        # decode az from the bin index: asin(sin(x)) aliases symmetric peaks
+        # and loses half-bin precision (audit bug #6)
+        az = (ia + 0.5) / self.n_az * 2 * math.pi - math.pi
+        el = (ie + 0.5) / self.n_el * math.pi - math.pi / 2
         score = float(sal[ie, ia])
         # looming bonus: attended target gets priority boost when closing
         score *= (1.0 + 0.5 * self.looming)
