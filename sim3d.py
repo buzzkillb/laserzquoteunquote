@@ -269,7 +269,13 @@ class Tracker3D:
 # Pan/tilt turret: two independent slew axes, 3D lead-pursuit solution
 # ----------------------------------------------------------------------------
 class PanTiltTurret:
-    def __init__(self, pos, power_w, spot_mm, max_slew_dps=250.0):
+    def __init__(self, pos, power_w, spot_mm, max_slew_dps=250.0,
+                 cooldown_s=0.05):
+        # cooldown_s: minimum time between shot STARTS. Real hardware fires
+        # one dwell exposure per shot; without this, kill rate scaled with
+        # frame rate (audit bug #1). 50 ms == the MCU fire-loop cadence.
+        self.cooldown_s = cooldown_s
+        self._next_ready = 0.0
         self.pos = np.asarray(pos, dtype=float)
         self.power = power_w
         self.spot_mm = spot_mm
@@ -317,6 +323,14 @@ class PanTiltTurret:
     def range_to(self, point):
         return np.linalg.norm(np.asarray(point) - self.pos)
 
+    def _locked_target(self, tracks):
+        """Track currently held by lock_id, if still a valid candidate."""
+        if self.lock_id is None:
+            return None
+        return next((t for t in tracks
+                     if t.id == self.lock_id and t.confirmed and t.misses < 4),
+                    None)
+
     def engage(self, tracks, dt, swarm_list, rng, target_keys=None):
         """target_keys: None = engage every species; else only these species
         are targeted (e.g. backyard mode: just mosquitoes + flies)."""
@@ -324,6 +338,13 @@ class PanTiltTurret:
         self.heat = max(0.0, self.heat - 0.55 * dt)
         if self.heat > 0.92:
             self.target_id = None
+            return
+        if self.clock < self._next_ready:
+            # cooldown between shots: keep slewing toward the lock, no beam
+            tgt = self._locked_target(tracks)
+            if tgt is not None:
+                az_t, el_t = self.angles_to(tgt.x[:3])
+                self._slew_toward(az_t, el_t, dt)
             return
 
         cands = [t for t in tracks if t.confirmed and t.misses < 4]
@@ -409,7 +430,7 @@ class PanTiltTurret:
         if miss > hit_r:
             return
 
-        # FIRE
+        # FIRE: one dwell exposure per shot, cooldown-gated (hardware-real)
         self.firing = True
         self.shots += 1
         self.species_shots[tkey] += 1
@@ -432,6 +453,7 @@ class PanTiltTurret:
                     self.kill_events.append((self.clock, closest.copy(), tkey))
                     break
         self.heat = min(1.0, self.heat + tp["dwell"] * 4.0)
+        self._next_ready = self.clock + self.cooldown_s
 
     def _classify_species(self, track):
         """Motion-signature ID: speed + altitude band. A 1.1 m/s track hugging
@@ -461,13 +483,15 @@ class PanTiltTurret:
 # ----------------------------------------------------------------------------
 def run_sim(mode="mixed", single="mosquitoes", seconds=60.0, dt=1 / 60.0,
             seed=7, out_png="defense3d.png", out_mp4="defense3d.mp4",
-            creatures=None, brain_mode="hybrid",
+            creatures=None, brain_mode="hybrid", laser_w=None,
             return_frames=False, render=True):
     """Full ecosystem ALWAYS spawns -- every species is on the battlefield.
     creatures: list of species keys to TARGET (the laser only engages these).
     None = engage everything. Non-target species roam the field untouched.
     seconds is an upper bound only -- the engagement ends early once every
     TARGETED creature is destroyed (spared species keep flying).
+    laser_w: fixed optical power in W (the physical rig has ONE diode).
+    None = auto-size per species table (legacy multi-laser fantasy).
     return_frames: include the animation frames in stats["frames"].
     render: set False for fast benchmark runs (no MP4/PNG output)."""
     rng = random.Random(seed)
@@ -485,9 +509,9 @@ def run_sim(mode="mixed", single="mosquitoes", seconds=60.0, dt=1 / 60.0,
 
     sensor = Sensor3D()
     tracker = Tracker3D()
-    # beam tuning sized for the strongest TARGETED threat (spared species
-    # never take a beam, so their power tier doesn't drive tuning)
-    max_power = max(THREATS[k]["power_w"] for k in targets)
+    # laser power: laser_w wins if set (backyard rig = ONE fixed 2 W diode);
+    # 0/None = auto-size per species table (legacy multi-laser fantasy).
+    max_power = laser_w or max(THREATS[k]["power_w"] for k in targets)
     turret = PanTiltTurret(pos=(0.3, AREA / 2, 1.5),
                            power_w=max_power, spot_mm=8.0)
     brain = flybrain.FlyBrain()
@@ -993,6 +1017,9 @@ if __name__ == "__main__":
                          "kalman (pure engineering baseline)")
     ap.add_argument("--out-png", default="defense3d.png")
     ap.add_argument("--out-mp4", default="defense3d.mp4")
+    ap.add_argument("--laser-w", type=float, default=2.0,
+                    help="fixed optical power of THE one diode (backyard rig "
+                         "default 2 W); legacy auto-sizing = 0")
     a = ap.parse_args()
     creatures = None
     if a.creatures and a.creatures.lower() != "all":
@@ -1003,5 +1030,5 @@ if __name__ == "__main__":
     s = run_sim(mode=a.mode, single=a.creatures.split(",")[0].strip(),
                 seconds=a.seconds, seed=a.seed, out_png=a.out_png,
                 out_mp4=a.out_mp4, creatures=creatures,
-                brain_mode=a.brain)
+                brain_mode=a.brain, laser_w=(a.laser_w or None))
     print(json.dumps(s, indent=2))
