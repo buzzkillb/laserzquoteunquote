@@ -1,0 +1,12 @@
+# Large rendered media (regenerable output)
+*.mp4
+*.png
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Results / state
+benchmark_results.json
