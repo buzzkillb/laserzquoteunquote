@@ -54,6 +54,10 @@ typedef struct {
     int32_t dwell_done_us;    /* delivered so far */
     int32_t power_cw;         /* commanded beam power */
     int32_t heat_cp;          /* centi-percent 0..10000 */
+    int32_t heat_hcp;         /* half-centi-percent accumulator: decay is
+                               * 5.5 cP/tick; stored in 0.5 cP units so
+                               * every tick decays exactly 11 hcp with
+                               * zero drift vs sim3d.py's 5500 cP/s */
     uint32_t shot_count;
     uint32_t beam_ms_total;
     char veto_reason[24];
@@ -94,8 +98,8 @@ static void end_shot(void) {
     S.beam_ms_total += (uint32_t)(S.dwell_done_us / 1000);
     /* heat += power_cw * dwell_us / 5000  ==  dwell_s * 4 * power_w/2
      * expressed in centi-percent (matches sim3d.py's thermal model) */
-    S.heat_cp += (int32_t)(((int64_t)S.power_cw * S.dwell_done_us) / 5000);
-    if (S.heat_cp > 10000) S.heat_cp = 10000;
+    S.heat_hcp += (int32_t)(((int64_t)S.power_cw * S.dwell_done_us) / 2500);
+    if (S.heat_hcp > 20000) S.heat_hcp = 20000;
     S.dwell_done_us = 0;
 }
 
@@ -103,7 +107,7 @@ static void end_shot(void) {
 static const char *veto_check(int32_t power_cw) {
     if (S.estop) return "estop";
     if (!S.armed) return "disarmed";
-    if (S.heat_cp >= HEAT_LIMIT) return "thermal";
+    if (S.heat_hcp >= 2 * HEAT_LIMIT) return "thermal";
     if (power_cw > H.beam_cw_limit) return "power";
     return NULL;
 }
@@ -135,11 +139,11 @@ int fc_on_line(const char *line, fc_tx_fn out, void *ud) {
         int flags = (S.armed ? FLAG_ARMED : 0) |
                     (S.firing ? FLAG_FIRING : 0) |
                     (S.estop ? FLAG_ESTOP : 0) |
-                    (S.heat_cp >= HEAT_LIMIT ? FLAG_THERMAL : 0);
+                    (S.heat_hcp >= 2 * HEAT_LIMIT ? FLAG_THERMAL : 0);
         int n = snprintf(t, sizeof t, "T,%u,%ld,%ld,%d,%ld,%lu,%lu",
                          (unsigned)S.last_seq,
                          (long)S.az_md, (long)S.el_md, flags,
-                         (long)S.heat_cp,
+                         (long)(S.heat_hcp / 2),
                          (unsigned long)S.shot_count,
                          (unsigned long)S.beam_ms_total);
         S.last_rx_ms = S.ms;
@@ -196,11 +200,10 @@ void fc_tick_1khz(void) {
         if (S.dwell_done_us >= S.dwell_us) end_shot();
     }
 
-    /* thermal decay, every tick: 5.5 cP per ms (5500 cP/s) -- matches
-     * sim3d.py's 0.55/s on the 0..1 scale, applied per tick exactly as
-     * the sim applies it per shot period */
-    S.heat_cp = (S.heat_cp * 2 - 11) / 2;   /* integer-safe 5.5 avg */
-    if (S.heat_cp < 0) S.heat_cp = 0;
+    /* thermal decay, every tick: exactly 11 hcp = 5.5 cP (5500 cP/s),
+     * zero integer drift vs sim3d.py's 0.55/s model */
+    S.heat_hcp -= 11;
+    if (S.heat_hcp < 0) S.heat_hcp = 0;
 
     /* watchdog: armed with no valid frame for 500 ms -> safe state */
     if (S.armed && (uint32_t)(S.ms - S.last_rx_ms) > WATCHDOG_MS) {
@@ -224,7 +227,7 @@ void fc_note_rx(void) { S.last_rx_ms = S.ms; }
 const char *fc_veto_reason(void) { return S.veto_reason; }
 int fc_armed(void) { return S.armed; }
 int fc_firing(void) { return S.firing; }
-int32_t fc_heat(void) { return S.heat_cp; }
+int32_t fc_heat(void) { return S.heat_hcp / 2; }
 uint32_t fc_shots(void) { return S.shot_count; }
 uint32_t fc_beam_ms(void) { return S.beam_ms_total; }
 int fc_estop_active(void) { return S.estop; }
