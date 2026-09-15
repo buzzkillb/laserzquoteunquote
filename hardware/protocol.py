@@ -14,7 +14,8 @@ integers; units are chosen so values fit int32 with headroom:
 
 Frames:
     -> F,<seq>,<az_md>,<el_md>,<dwell_us>,<power_cW>   fire command
-    -> A,<seq>                                          abort/stop
+    -> A,<seq>                                          abort/stop (disarms)
+    -> R,<seq>                                          (re)arm
     -> S                                               status request
     <- T,<seq>,<az_md>,<el_md>,<flags>,<heat_cP>,<shots>,<beam_ms>
     <- V,<reason>                                       veto notice
@@ -33,6 +34,7 @@ from hardware.interfaces import FireCommand
 
 CMD_FIRE = "F"
 CMD_ABORT = "A"
+CMD_ARM = "R"
 CMD_STATUS = "S"
 RSP_STATUS = "T"
 RSP_VETO = "V"
@@ -51,6 +53,13 @@ def encode_fire(cmd: FireCommand) -> str:
 
 def encode_abort(seq: int = 0) -> str:
     return f"{CMD_ABORT},{seq % 65536}\n"
+
+
+def encode_arm(seq: int = 0) -> str:
+    """(Re)arm the MCU. The core boots disarmed; abort/watchdog disarm.
+    Arm discipline lives in the MCU so a crashed Pi can only leave the
+    beam off."""
+    return f"{CMD_ARM},{seq % 65536}\n"
 
 
 def encode_status_request() -> str:

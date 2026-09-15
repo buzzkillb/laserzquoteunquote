@@ -449,7 +449,18 @@ class PanTiltTurret:
                     # selective fire: non-targets are never registered as kills
                     continue
                 proj = sw.pos + sw.vel * tof
-                if np.linalg.norm(proj - closest) < hit_r:
+                # The galvo controls ANGLE, not range: a creature within
+                # hit_r of the beam LINE (at its own true range) takes
+                # the dose. Measuring from the aimed impact point would
+                # make kills depend on mono-range accuracy, which is
+                # wrong physics -- the beam extends through the whole
+                # band regardless of where the tracker thinks it ends.
+                w = proj - self.pos
+                along_w = np.dot(w, beam_dir)
+                if along_w <= 0:
+                    continue
+                perp = np.linalg.norm(w - beam_dir * along_w)
+                if perp < hit_r:
                     sw.hp = 0.0
                     self.kills += 1
                     self.species_kills[sw.key] += 1

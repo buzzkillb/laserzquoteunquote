@@ -52,6 +52,8 @@ class McuLaserDriver(LaserDriver):
         self._seq = 0
         self._status = TurretStatus()
         self._last_veto: Optional[VetoReason] = None
+        self.link.send(protocol.encode_arm(self._seq))   # arm on connect
+        self._seq = (self._seq + 1) % 65536
 
     def fire(self, dwell_ms: float, power_w: float) -> None:
         cmd = FireCommand(az=self._status.az, el=self._status.el,
