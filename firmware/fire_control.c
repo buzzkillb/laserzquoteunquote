@@ -196,9 +196,10 @@ void fc_tick_1khz(void) {
         if (S.dwell_done_us >= S.dwell_us) end_shot();
     }
 
-    /* thermal decay, every tick: 5.5 cP/s*1000 -> alternate 5/6
-     * (integer ticks; 5500 cP/s matches sim3d.py's 0.55/s on a 0..1 scale) */
-    S.heat_cp -= (S.ms & 1) ? 5 : 6;
+    /* thermal decay, every tick: 5.5 cP per ms (5500 cP/s) -- matches
+     * sim3d.py's 0.55/s on the 0..1 scale, applied per tick exactly as
+     * the sim applies it per shot period */
+    S.heat_cp = (S.heat_cp * 2 - 11) / 2;   /* integer-safe 5.5 avg */
     if (S.heat_cp < 0) S.heat_cp = 0;
 
     /* watchdog: armed with no valid frame for 500 ms -> safe state */
