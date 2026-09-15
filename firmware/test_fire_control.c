@@ -169,6 +169,36 @@ int main(void) {
     CHECK(fc_on_line("F,78,40000,5000,1000,200", capture, 0) == 1);
     CHECK(strncmp(txbuf, "V,human_in_beam", 15) == 0);         /* new set committed */
 
+    /* ---- 11. re-command mid-dwell: the in-flight shot is accounted ----
+     * A fire command arriving before the current dwell expires must not
+     * silently discard the dwell already delivered. If it does, a Pi
+     * re-commanding faster than its own dwell holds the beam on while
+     * heat, beam-time and shot count all stay at zero, and the thermal
+     * veto can never trip. hardware/sim_devices.py refuses such a
+     * command outright ("MCU would simply refuse"). */
+    fc_reset();
+    fc_on_line("R,80", capture, 0);
+    CHECK(fc_on_line("F,81,0,0,500000,200", capture, 0) == 0);
+    for (int i = 0; i < 100; i++) fc_tick_1khz();      /* 100 ms delivered */
+    CHECK(fc_firing() == 1);
+    CHECK(fc_beam_ms() == 0);                          /* not yet accounted */
+    CHECK(fc_on_line("F,82,1000,0,500000,200", capture, 0) == 0);
+    CHECK(fc_beam_ms() == 100);      /* the 100 ms IS charged, not dropped */
+    CHECK(fc_shots() == 1);
+    CHECK(fc_heat() > 0);
+
+    /* holding the beam by re-commanding at 1 kHz must still reach the
+     * thermal ceiling rather than run forever at zero heat */
+    fc_reset();
+    fc_on_line("R,83", capture, 0);
+    for (int i = 0; i < 2000; i++) {
+        fc_on_line("F,84,0,0,500000,200", capture, 0);
+        fc_tick_1khz();
+    }
+    CHECK(fc_firing() == 0);                           /* beam is OFF */
+    CHECK(fc_heat() >= 9000);                          /* thermal tripped */
+    CHECK(fc_beam_ms() > 0 && fc_beam_ms() < 2000);    /* duty-cycle limited */
+
     printf("ALL %d CHECKS PASSED\n", checks);
     return 0;
 }
