@@ -27,6 +27,11 @@ class VetoReason(Enum):
     BEAM_BUDGET = "beam_budget"          # dwell-time budget exhausted
     E_STOP = "e_stop"                    # hardware emergency stop line
     ARMED_OFF = "armed_off"              # system not armed
+    # strings emitted verbatim by firmware/fire_control.c (kept 1:1 with
+    # the C veto_check() chain; the old names above stay for sim_devices)
+    ESTOP = "estop"                      # C: estop latch active
+    DISARMED = "disarmed"                # C: no arm (R) frame yet
+    POWER = "power"                      # C: power_cw > beam_cw_limit
 
 
 @dataclass

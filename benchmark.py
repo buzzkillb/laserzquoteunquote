@@ -354,7 +354,7 @@ def render_video(results, seed, creatures, out_mp4, max_fps=25):
                     f"KALMAN TELEMETRY // PURE ENGINEERING\n"
                     f"az {math.degrees(f['az']):7.1f} deg   "
                     f"el {math.degrees(f['el']):6.1f} deg\n"
-                    f"tracks {f['n_tracks']:3d}   heat {f['heat']:4.0f} %\n"
+                    f"tracks {f['n_tracks']:3d}   heat {f['heat']*100:4.0f} %\n"
                     f"neurons used: 0 (boring)\n"
                     f"6-state KF + lead pursuit")
         return []
