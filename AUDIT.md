@@ -127,3 +127,23 @@ This is exactly how the two working precedents do it:
 - Intellectual Ventures "Photonic Fence" — commercial equivalent, malaria focus.
 - Photonic Fence videos show the same pipeline this repo simulates:
   detect → track → lead → fire. The physics shown matches the sim's model well.
+
+## 6. Audit rounds 4–6 (code-complete state, all verified by probes)
+
+Round 4 (commit 6a4c17a): VetoReason enum added ESTOP/DISARMED/POWER to match
+the exact C strings (serial path previously collapsed them to WATCHDOG);
+benchmark HUD heat now on 0..100 scale.
+
+Round 5 (commits after): S-status frame tolerates CRLF terminations; dead
+heat_cp/HEAT_DECAY_PER_S removed in favor of the exact heat_hcp accumulator
+(5.5 cP/ms decay, zero integer drift vs sim); protocol.py documents that W
+is reserved (T-frame carries the watchdog state).
+
+Round 6: veto-zone parity between drivers. The C core now implements the
+same cone-veto list as SimInterlock (Z,<az>,<el>,<r> pushes; Z,END commits
+only while disarmed; immutable while armed), checked in the F gate before
+thermal. Firmware bench: 66/66 checks. E2E: PASS (8/14 vision kills, 20/20
+firmware shots, heat 409, no vetoes, abort/rearm OK). Protocol fuzz:
+2000/2000. py_compile clean. Hardware-only remainders: flashing the ESP32
+board package, mechanical alignment, real-optics calibration (per BOM in
+RIG.md).

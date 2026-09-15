@@ -7,6 +7,7 @@
  *   -> A,<seq>                                         abort
  *   -> R,<seq>                                         (re)arm
  *   -> S                                               status request
+ *   -> Z,<az_md>,<el_md>,<r_md> / Z,END                veto-zone push
  *   <- T,<seq>,<az_md>,<el_md>,<flags>,<heat_cP>,<shots>,<beam_ms>
  *   <- V,<reason>                                      veto notice
  *
@@ -35,6 +36,7 @@
 /* ------------------------------ constants ------------------------------ */
 #define WATCHDOG_MS 500
 #define HEAT_LIMIT 9200         /* refuse new shots above 92% */
+#define MAX_ZONES 8
 #define FLAG_ARMED 1
 #define FLAG_FIRING 2
 #define FLAG_ESTOP 4
@@ -64,6 +66,12 @@ typedef struct {
 static fc_state S;
 static fire_hal H;
 
+typedef struct { int32_t az_md, el_md, r_md; } fc_zone;
+static fc_zone ZN[MAX_ZONES];      /* active zones (pushed while disarmed) */
+static int zn_n;
+static fc_zone ZS[MAX_ZONES];      /* scratch, committed on Z,END */
+static int zs_n;
+
 /* ------------------------------ helpers ------------------------------ */
 static int32_t clamp_i32(int32_t v, int32_t lo, int32_t hi) {
     return v < lo ? lo : (v > hi ? hi : v);
@@ -71,6 +79,7 @@ static int32_t clamp_i32(int32_t v, int32_t lo, int32_t hi) {
 
 void fc_reset(void) {
     memset(&S, 0, sizeof S);
+    zn_n = 0; zs_n = 0;
 }
 
 int fc_init(const fire_hal *hal) {
@@ -102,9 +111,22 @@ static void end_shot(void) {
 }
 
 /* ------------------------------ veto chain ------------------------------ */
-static const char *veto_check(int32_t power_cw) {
+static int zone_hit(int32_t az_md, int32_t el_md) {
+    for (int i = 0; i < zn_n; i++) {
+        int32_t daz = az_md - ZN[i].az_md;
+        if (daz > 180000) daz -= 360000;
+        if (daz < -180000) daz += 360000;
+        int32_t de = el_md - ZN[i].el_md;
+        int64_t rr = (int64_t)daz * daz + (int64_t)de * de;
+        if (rr <= (int64_t)ZN[i].r_md * ZN[i].r_md) return 1;
+    }
+    return 0;
+}
+
+static const char *veto_check(int32_t power_cw, int32_t az_md, int32_t el_md) {
     if (S.estop) return "estop";
     if (!S.armed) return "disarmed";
+    if (zone_hit(az_md, el_md)) return "human_in_beam";
     if (S.heat_hcp >= 2 * HEAT_LIMIT) return "thermal";
     if (power_cw > H.beam_cw_limit) return "power";
     return NULL;
@@ -128,6 +150,34 @@ int fc_on_line(const char *line, fc_tx_fn out, void *ud) {
         S.last_seq = (uint16_t)strtoul(line + 2, NULL, 10);
         S.last_rx_ms = S.ms;
         if (!S.estop) S.armed = 1;
+        return 0;
+    }
+
+    /* Z,... -- veto-zone push, mirroring SimInterlock semantics:
+     *   Z,<az_md>,<el_md>,<radius_md>   one cone;  Z,END commits.
+     * Zones are immutable while armed; a commit while armed keeps the
+     * previous set. Accumulation is scratch-only until Z,END. */
+    if (line[0] == 'Z' && line[1] == ',') {
+        S.last_rx_ms = S.ms;
+        const char *rest = line + 2;
+        if (rest[0] == 'E' && rest[1] == 'N' && rest[2] == 'D') {
+            if (!S.armed) {
+                zn_n = zs_n;
+                for (int i = 0; i < zs_n; i++) ZN[i] = ZS[i];
+            }
+            zs_n = 0;
+            return 0;
+        }
+        if (zs_n < MAX_ZONES) {
+            char *p;
+            long a = strtol(rest, &p, 10);
+            long e = (p && *p == ',') ? strtol(p + 1, &p, 10) : 0;
+            long r = (p && *p == ',') ? strtol(p + 1, NULL, 10) : 0;
+            ZS[zs_n].az_md = (int32_t)a;
+            ZS[zs_n].el_md = (int32_t)e;
+            ZS[zs_n].r_md = (int32_t)r;
+            zs_n++;
+        }
         return 0;
     }
 
@@ -165,7 +215,8 @@ int fc_on_line(const char *line, fc_tx_fn out, void *ud) {
         S.last_seq = (uint16_t)seq;
         S.last_rx_ms = S.ms;
 
-        const char *veto = veto_check((int32_t)power_cw);
+        const char *veto = veto_check((int32_t)power_cw, (int32_t)az_md,
+                                      (int32_t)el_md);
         if (veto) {
             snprintf(S.veto_reason, sizeof S.veto_reason, "%s", veto);
             char v[24];

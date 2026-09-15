@@ -144,6 +144,31 @@ int main(void) {
     CHECK(fc_on_line(NULL, capture, 0) == 0);
     CHECK(fc_firing() == 0);
 
+    /* ---- 10. veto zones: Z push + Z,END commit, immutable while armed ---- */
+    fc_on_line("A,69", capture, 0);   /* test 8 left the core armed; A disarms */
+    /* zones are only committed while disarmed: push now, then arm */
+    CHECK(fc_on_line("Z,30000,5000,2000", capture, 0) == 0);  /* (30,5) r=2 deg */
+    CHECK(fc_on_line("Z,END", capture, 0) == 0);
+    fc_on_line("R,70", capture, 0);
+    CHECK(fc_armed() == 1);
+    CHECK(fc_on_line("F,71,30000,5000,1000,200", capture, 0) == 1);
+    CHECK(strncmp(txbuf, "V,human_in_beam", 15) == 0);        /* inside cone */
+    CHECK(fc_on_line("F,72,40000,5000,1000,200", capture, 0) == 0);
+    run_shot_out();                                            /* outside cone */
+    /* push while armed: ignored (zones immutable until disarm+recommit) */
+    CHECK(fc_on_line("Z,40000,5000,1000", capture, 0) == 0);
+    CHECK(fc_on_line("Z,END", capture, 0) == 0);
+    fc_on_line("A,73", capture, 0);                            /* disarm */
+    fc_on_line("R,74", capture, 0);                            /* recommit: old set active */
+    CHECK(fc_on_line("F,75,40000,5000,1000,200", capture, 0) == 0);
+    run_shot_out();
+    fc_on_line("A,76", capture, 0);
+    CHECK(fc_on_line("Z,40000,5000,1000", capture, 0) == 0);   /* while disarmed */
+    CHECK(fc_on_line("Z,END", capture, 0) == 0);
+    fc_on_line("R,77", capture, 0);
+    CHECK(fc_on_line("F,78,40000,5000,1000,200", capture, 0) == 1);
+    CHECK(strncmp(txbuf, "V,human_in_beam", 15) == 0);         /* new set committed */
+
     printf("ALL %d CHECKS PASSED\n", checks);
     return 0;
 }
