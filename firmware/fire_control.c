@@ -34,7 +34,6 @@
 
 /* ------------------------------ constants ------------------------------ */
 #define WATCHDOG_MS 500
-#define HEAT_DECAY_PER_S 5500   /* centi-percent per second (10000 = 100%) */
 #define HEAT_LIMIT 9200         /* refuse new shots above 92% */
 #define FLAG_ARMED 1
 #define FLAG_FIRING 2
@@ -53,7 +52,6 @@ typedef struct {
     int32_t dwell_us;         /* dwell for shot in progress */
     int32_t dwell_done_us;    /* delivered so far */
     int32_t power_cw;         /* commanded beam power */
-    int32_t heat_cp;          /* centi-percent 0..10000 */
     int32_t heat_hcp;         /* half-centi-percent accumulator: decay is
                                * 5.5 cP/tick; stored in 0.5 cP units so
                                * every tick decays exactly 11 hcp with
@@ -133,8 +131,8 @@ int fc_on_line(const char *line, fc_tx_fn out, void *ud) {
         return 0;
     }
 
-    /* S -- status request */
-    if (line[0] == 'S' && line[1] == 0) {
+    /* S -- status request (tolerate CRLF: real UARTs terminate lines) */
+    if (line[0] == 'S' && (line[1] == 0 || line[1] == '\r' || line[1] == '\n')) {
         char t[80];
         int flags = (S.armed ? FLAG_ARMED : 0) |
                     (S.firing ? FLAG_FIRING : 0) |
