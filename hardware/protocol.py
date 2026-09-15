@@ -20,6 +20,10 @@ Frames:
     <- T,<seq>,<az_md>,<el_md>,<flags>,<heat_cP>,<shots>,<beam_ms>
     <- V,<reason>                                       veto notice
     <- W,<reason>                                       watchdog trip notice
+                                        (reserved: the MCU core records the
+                                        watchdog trip in its status flags;
+                                        the next T frame carries it. Only V
+                                        and T are emitted as live replies.)
 
 The MCU ACKs nothing; the next T frame with matching seq is the ack.
 Commands unacked for 3 status periods are retried by the slow loop,

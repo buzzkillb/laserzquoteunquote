@@ -192,7 +192,6 @@ int fc_on_line(const char *line, fc_tx_fn out, void *ud) {
 /* ------------------------------ tick: the fast loop ------------------------------ */
 void fc_tick_1khz(void) {
     S.ms++;
-
     if (S.firing) {
         S.dwell_done_us += 1000;               /* us delivered this tick */
         if (S.dwell_done_us >= S.dwell_us) end_shot();
