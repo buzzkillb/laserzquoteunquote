@@ -215,6 +215,14 @@ int fc_on_line(const char *line, fc_tx_fn out, void *ud) {
         S.last_seq = (uint16_t)seq;
         S.last_rx_ms = S.ms;
 
+        /* A shot already in flight is closed out BEFORE this command is
+         * judged. Its delivered dwell has to be charged to heat and
+         * beam-time, or a Pi that re-commands faster than its own dwell
+         * keeps the beam lit while heat reads zero and the thermal veto
+         * never trips. Ending it here also guarantees the beam is off
+         * while the galvo slews to the new target. */
+        if (S.firing) end_shot();
+
         const char *veto = veto_check((int32_t)power_cw, (int32_t)az_md,
                                       (int32_t)el_md);
         if (veto) {
